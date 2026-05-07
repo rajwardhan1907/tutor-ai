@@ -7,6 +7,7 @@ import logger from './utils/logger';
 import { requestLogger } from './middleware/requestLogger';
 import { errorHandler } from './middleware/errorHandler';
 import healthRouter from './routes/health';
+import tutorRouter from './routes/tutor';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -22,6 +23,7 @@ app.use(requestLogger);
 
 // Routes
 app.use('/health', healthRouter);
+app.use('/api/tutor-cmdq', tutorRouter);
 
 // 404 fallback
 app.use((_req, res) => {
