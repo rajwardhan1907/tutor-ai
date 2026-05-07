@@ -26,3 +26,5 @@ Thumbs.db
 *.ntvs*
 *.njsproj
 *.sln
+
+data/*.db

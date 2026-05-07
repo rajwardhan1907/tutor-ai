@@ -1,16 +1,17 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { body, validationResult } from 'express-validator';
+import { body, param, validationResult } from 'express-validator';
 
 import logger from '../utils/logger';
 import { search } from '../services/searchService';
 import { generateAnswer, type AnswerMode } from '../services/answerService';
 import { checkAnswer } from '../middleware/qualityControl';
 import { addToReviewQueue } from '../services/humanReviewQueue';
+import { logInteraction, getStudentHistory } from '../services/loggingService';
 
 const router = Router();
 
 // ---------------------------------------------------------------------------
-// Validation
+// Validation helpers
 // ---------------------------------------------------------------------------
 
 const VALID_MODES: AnswerMode[] = [
@@ -25,33 +26,26 @@ const VALID_MODES: AnswerMode[] = [
 
 const askValidators = [
   body('question')
-    .isString()
-    .withMessage('question must be a string')
-    .trim()
-    .notEmpty()
-    .withMessage('question is required'),
+    .isString().withMessage('question must be a string')
+    .trim().notEmpty().withMessage('question is required'),
 
   body('studentId')
-    .isString()
-    .withMessage('studentId must be a string')
-    .trim()
-    .notEmpty()
-    .withMessage('studentId is required'),
+    .isString().withMessage('studentId must be a string')
+    .trim().notEmpty().withMessage('studentId is required'),
 
-  body('module')
-    .optional()
-    .isString()
-    .withMessage('module must be a string'),
-
-  body('course')
-    .optional()
-    .isString()
-    .withMessage('course must be a string'),
+  body('module').optional().isString().withMessage('module must be a string'),
+  body('course').optional().isString().withMessage('course must be a string'),
 
   body('mode')
     .optional()
     .isIn(VALID_MODES)
     .withMessage(`mode must be one of: ${VALID_MODES.join(', ')}`),
+];
+
+const historyValidators = [
+  param('studentId')
+    .isString().withMessage('studentId must be a string')
+    .trim().notEmpty().withMessage('studentId is required'),
 ];
 
 // ---------------------------------------------------------------------------
@@ -102,11 +96,20 @@ router.post(
           timestamp: new Date().toISOString(),
         });
 
-        logger.warn('Question escalated to human review', {
+        logInteraction({
           studentId,
-          module: moduleId,
-          course,
           question,
+          answer: '',
+          sources: [],
+          module: moduleId ?? '',
+          course: course ?? '',
+          mode,
+          confidence: confidenceScore,
+          reviewStatus: 'pending',
+        });
+
+        logger.warn('Question escalated to human review', {
+          studentId, module: moduleId, course, question,
         });
 
         res.status(200).json({
@@ -117,7 +120,7 @@ router.post(
       }
 
       // 3. Generate the answer with GPT-4o
-      const { answer, sourcesUsed } = await generateAnswer(
+      const { answer } = await generateAnswer(
         question,
         chunks,
         mode as AnswerMode,
@@ -129,10 +132,7 @@ router.post(
 
       if (!qc.passed) {
         logger.warn('Answer failed quality check', {
-          studentId,
-          reason: qc.reason,
-          module: moduleId,
-          course,
+          studentId, reason: qc.reason, module: moduleId, course,
           durationMs: Date.now() - startedAt,
         });
 
@@ -144,32 +144,55 @@ router.post(
         return;
       }
 
-      // 5. Log the full interaction for the audit pipeline
-      logger.info('Tutor interaction completed', {
+      // 5. Persist and log the successful interaction
+      const sources = chunks.map(({ text, module: mod, course: crs, source }) => ({
+        text, module: mod, course: crs, source,
+      }));
+
+      logInteraction({
         studentId,
-        module: moduleId,
-        course,
-        mode,
         question,
-        confidenceScore,
-        sourcesUsed,
-        answerLength: answer.length,
-        durationMs: Date.now() - startedAt,
+        answer,
+        sources,
+        module: moduleId ?? '',
+        course: course ?? '',
+        mode,
+        confidence: confidenceScore,
+        reviewStatus: 'not_required',
       });
 
       // 6. Return the successful response
       res.status(200).json({
         answer,
-        sources: chunks.map(({ text, module: mod, course: crs, source }) => ({
-          text,
-          module: mod,
-          course: crs,
-          source,
-        })),
+        sources,
         confidence: confidenceScore,
         mode,
         needsHumanReview: false,
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /history/:studentId
+// ---------------------------------------------------------------------------
+
+router.get(
+  '/history/:studentId',
+  historyValidators,
+  (req: Request, res: Response, next: NextFunction): void => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ status: 'error', errors: errors.array() });
+      return;
+    }
+
+    try {
+      const { studentId } = req.params;
+      const history = getStudentHistory(studentId);
+      res.status(200).json({ studentId, count: history.length, interactions: history });
     } catch (err) {
       next(err);
     }
