@@ -10,10 +10,12 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@pinecone-database/pinecone": "^7.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "helmet": "^7.1.0",
+    "openai": "^6.36.0",
     "uuid": "^10.0.0",
     "winston": "^3.13.0"
   },
