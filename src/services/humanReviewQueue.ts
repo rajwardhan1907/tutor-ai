@@ -28,6 +28,10 @@ function readQueue(): ReviewEntry[] {
   }
 }
 
+export function readReviewQueue(): ReviewEntry[] {
+  return readQueue();
+}
+
 export async function addToReviewQueue(entry: ReviewEntry): Promise<void> {
   _writeLock = _writeLock.then(async () => {
     const queue = readQueue();

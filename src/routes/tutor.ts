@@ -1,17 +1,39 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { body, param, validationResult } from 'express-validator';
+import rateLimit from 'express-rate-limit';
 
 import logger from '../utils/logger';
 import { search } from '../services/searchService';
 import { generateAnswer, type AnswerMode } from '../services/answerService';
 import { checkAnswer } from '../middleware/qualityControl';
-import { addToReviewQueue } from '../services/humanReviewQueue';
+import { addToReviewQueue, readReviewQueue } from '../services/humanReviewQueue';
 import { logInteraction, getStudentHistory } from '../services/loggingService';
 
 const router = Router();
 
 // ---------------------------------------------------------------------------
-// Validation helpers
+// Rate limiter — 20 requests per minute, keyed on studentId from body
+// ---------------------------------------------------------------------------
+
+const askLimiter = rateLimit({
+  windowMs: 60 * 1_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // studentId is always present for valid requests; missing body fails validation
+  keyGenerator: (req) =>
+    (req.body as { studentId?: string }).studentId ?? 'anonymous',
+  validate: { ip: false },   // suppress IPv6 warning — we key on studentId, not IP
+  handler: (_req, res) => {
+    res.status(429).json({
+      status: 'error',
+      message: 'Too many requests — limit is 20 per minute per student.',
+    });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Validation rules
 // ---------------------------------------------------------------------------
 
 const VALID_MODES: AnswerMode[] = [
@@ -54,6 +76,7 @@ const historyValidators = [
 
 router.post(
   '/ask',
+  askLimiter,
   askValidators,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const errors = validationResult(req);
@@ -193,6 +216,22 @@ router.get(
       const { studentId } = req.params;
       const history = getStudentHistory(studentId);
       res.status(200).json({ studentId, count: history.length, interactions: history });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /review-queue  (admin)
+// ---------------------------------------------------------------------------
+
+router.get(
+  '/review-queue',
+  (_req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const queue = readReviewQueue();
+      res.status(200).json({ count: queue.length, entries: queue });
     } catch (err) {
       next(err);
     }
